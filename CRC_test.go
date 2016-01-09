@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func Test_getCheckSum(t *testing.T) {
+func Test_getCheckSumFromBEPacket(t *testing.T) {
 
 }
 
