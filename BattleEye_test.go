@@ -46,3 +46,10 @@ func Test_BuildHeader(t *testing.T) {
 		}
 	}
 }
+
+func Test_LiveServer(t *testing.T) {
+	be := New(&BattleEyeConfig{Host: "127.0.0.1", Port: "2302", Password: "TestPw"})
+	go be.Run()
+	<-time.After(time.Second * 10)
+	be.Stop()
+}

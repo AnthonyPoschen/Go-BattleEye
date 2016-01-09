@@ -52,6 +52,7 @@ type battleEye struct {
 	password string
 
 	finish chan struct{}
+	packet chan []byte
 	done   sync.WaitGroup
 	conn   *net.UDPConn
 }
@@ -60,6 +61,8 @@ type battleEye struct {
 func (be *battleEye) Run() {
 	// setup for running
 	be.finish = make(chan struct{})
+	be.packet = make(chan []byte)
+	defer close(be.packet)
 	be.done.Add(1)
 	defer be.done.Done()
 
@@ -78,6 +81,8 @@ func (be *battleEye) Run() {
 	var UpdatePacket <-chan time.Time
 	ConnectTimer := time.After(time.Millisecond)
 
+	newPacketArrived := make(chan []byte)
+	go be.ReadPacketLoop(newPacketArrived)
 loop:
 	for {
 
@@ -85,7 +90,8 @@ loop:
 		// need to create case's for doing actual work.
 		case <-ConnectTimer:
 			// send a connect packet
-			//be.conn.Write()
+			fmt.Println("Writing Connection packet")
+			be.conn.Write(buildConnectionPacket(be.password))
 		case <-UpdatePacket:
 			UpdatePacket = time.After(time.Second * 5)
 			// do Update Packet
@@ -108,7 +114,18 @@ loop:
 func (be *battleEye) Stop() {
 	close(be.finish)
 	be.done.Wait()
-	fmt.Println(be.conn)
+}
+
+func (be *battleEye) ReadPacketLoop(ch chan []byte) {
+	data := make([]byte, 1048576)
+	for {
+		count, err := be.conn.Read(data)
+		if err != nil {
+			fmt.Println("Failed to read from connection:", err)
+			continue
+		}
+		go func() { ch <- data[:count] }()
+	}
 }
 
 // Creates and Returns a new Client
@@ -123,11 +140,16 @@ func processPacket(data []byte) {
 
 }
 
-//func acknoledgePacket
-
 func buildHeader(Checksum uint32) []byte {
-	Check := make([]byte, 4, 4)
+	Check := make([]byte, 4, 4) // should reduce allocations when i benchmark this shit
 	binary.LittleEndian.PutUint32(Check, Checksum)
 	// build header and return it.
 	return append([]byte{}, 'B', 'E', Check[0], Check[1], Check[2], Check[3], 0xFF)
+}
+
+func buildConnectionPacket(pass string) []byte {
+	data := append([]byte{0x00}, []byte(pass)...)
+	checksum := makeChecksum(data)
+	header := buildHeader(checksum)
+	return append(header, data...)
 }
