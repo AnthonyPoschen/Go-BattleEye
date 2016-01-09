@@ -5,8 +5,6 @@ import (
 	"hash/crc32"
 )
 
-var crcTable *crc32.Table = crc32.MakeTable(crc32.IEEE)
-
 func getCheckSumFromBEPacket(data []byte) (uint32, error) {
 	notValidString := "Data not a Valid BE HEader: "
 	// check the data is minimum the size of a BE header
@@ -27,10 +25,10 @@ func getCheckSumFromBEPacket(data []byte) (uint32, error) {
 }
 
 func dataMatchesCheckSum(data []byte, Checksum uint32) bool {
-	return crc32.Checksum(data, crcTable) == Checksum
+	return crc32.ChecksumIEEE(data) == Checksum
 
 }
 
 func makeChecksum(data []byte) uint32 {
-	return crc32.Checksum(data, crcTable)
+	return crc32.ChecksumIEEE(data)
 }
