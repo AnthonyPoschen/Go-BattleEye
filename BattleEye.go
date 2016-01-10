@@ -2,7 +2,6 @@
 package BattleEye
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -51,11 +50,12 @@ type battleEye struct {
 	// RCON Password
 	password string
 
-	finish  chan struct{}
-	packet  chan []byte
-	done    sync.WaitGroup
-	conn    *net.UDPConn
-	running bool
+	finish   chan struct{}
+	packet   chan []byte
+	done     sync.WaitGroup
+	conn     *net.UDPConn
+	running  bool
+	sequence byte
 }
 
 // Blocking function will not return until closed with Stop.
@@ -150,19 +150,4 @@ func New(config BeConfig) *battleEye {
 	cfg := config.GetConfig()
 	BE := battleEye{host: cfg.Host, port: cfg.Port, password: cfg.Password}
 	return &BE
-}
-
-func buildHeader(Checksum uint32) []byte {
-	Check := make([]byte, 4) // should reduce allocations when i benchmark this shit
-	binary.LittleEndian.PutUint32(Check, Checksum)
-	// build header and return it.
-	return append([]byte{}, 'B', 'E', Check[0], Check[1], Check[2], Check[3])
-}
-
-func buildConnectionPacket(pass string) []byte {
-	data := append([]byte{255, 0}, []byte(pass)...)
-	checksum := makeChecksum(data)
-	binary.LittleEndian.Uint32([]byte{37, 111, 118, 65})
-	header := buildHeader(checksum)
-	return append(header, data...)
 }
