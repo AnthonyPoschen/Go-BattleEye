@@ -1,5 +1,6 @@
 package BattleEye
 
+// Types of packets used to communicate to BattlEye
 var packetType = struct {
 	LOGIN          byte
 	COMMAND        byte
@@ -9,6 +10,10 @@ var packetType = struct {
 	COMMAND:        0x01,
 	SERVER_MESSAGE: 0x02,
 }
+
+// Might rename this. but this is usually the identifier after a packet type
+// to give more context. i.e when recieving a login packet from the server it
+// will then send a pass or fail byte right after the packet type
 var packetResponse = struct {
 	LOGIN_PASS           byte
 	LOGIN_FAIL           byte
