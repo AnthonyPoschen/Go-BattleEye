@@ -14,30 +14,24 @@ type BattleEyeConfig struct {
 	Host     string
 	Port     string
 	Password string
+	PollFreq struct {
+		Chat int
+		Bans int
+	}
 }
 
-func (bec *BattleEyeConfig) GetConfig() struct {
-	Host     string
-	Port     string
-	Password string
-} {
-	return struct {
-		Host     string
-		Port     string
-		Password string
-	}{
-		bec.Host,
-		bec.Port,
-		bec.Password,
-	}
+func (bec BattleEyeConfig) GetConfig() BattleEyeConfig {
+	return bec
 }
 
 type BeConfig interface {
-	GetConfig() struct {
-		Host     string
-		Port     string
-		Password string
-	}
+	GetConfig() BattleEyeConfig
+}
+
+type ban struct {
+	GUID     string
+	Duration uint32
+	Reason   string
 }
 
 //--------------------------------------------------
@@ -58,6 +52,7 @@ type battleEye struct {
 	running  bool
 	sequence byte
 	chat     []string
+	bans     []ban
 }
 
 // Blocking function will not return until closed with Stop.
@@ -159,6 +154,7 @@ func (be *battleEye) SendCommand(command []byte) error {
 	return nil
 }
 
+// returns a copy of the current chat that has been sent from battlEye since the last clear.
 func (be *battleEye) GetChat() ([]string, error) {
 	if be.chat == nil {
 		return []string{}, errors.New("Chat not initilised")
@@ -166,6 +162,8 @@ func (be *battleEye) GetChat() ([]string, error) {
 	return be.chat, nil
 }
 
+// Clears the chat. this becomes very useful for any server wanting to perform information based on chat responses.
+// once procesed you can then remove the messages by calling clear.
 func (be *battleEye) ClearChat() error {
 	if be.chat == nil {
 		return errors.New("Chat not initilised")
@@ -174,10 +172,9 @@ func (be *battleEye) ClearChat() error {
 	return nil
 }
 
-func (be *battleEye) Status() (int, error) {
-	return 0, nil
-}
-
-func (be *battleEye) GetBans() ([]string, error) {
-	return []string{}, nil
+func (be *battleEye) GetBans() ([]ban, error) {
+	if be.bans == nil {
+		return []ban{}, errors.New("Bans not initilised")
+	}
+	return be.bans, nil
 }
