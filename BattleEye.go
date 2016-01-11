@@ -2,6 +2,7 @@
 package BattleEye
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -56,6 +57,7 @@ type battleEye struct {
 	conn     *net.UDPConn
 	running  bool
 	sequence byte
+	chat     []string
 }
 
 // Blocking function will not return until closed with Stop.
@@ -149,5 +151,33 @@ func New(config BeConfig) *battleEye {
 	// setup all variables
 	cfg := config.GetConfig()
 	BE := battleEye{host: cfg.Host, port: cfg.Port, password: cfg.Password}
+	BE.chat = make([]string, 0)
 	return &BE
+}
+
+func (be *battleEye) SendCommand(command []byte) error {
+	return nil
+}
+
+func (be *battleEye) GetChat() ([]string, error) {
+	if be.chat == nil {
+		return []string{}, errors.New("Chat not initilised")
+	}
+	return be.chat, nil
+}
+
+func (be *battleEye) ClearChat() error {
+	if be.chat == nil {
+		return errors.New("Chat not initilised")
+	}
+	be.chat = nil
+	return nil
+}
+
+func (be *battleEye) Status() (int, error) {
+	return 0, nil
+}
+
+func (be *battleEye) GetBans() ([]string, error) {
+	return []string{}, nil
 }
