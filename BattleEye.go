@@ -3,9 +3,10 @@ package BattleEye
 
 import (
 	"errors"
-	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,9 @@ type BattleEyeConfig struct {
 	ConnTimeout uint32
 	// time in seconds to wait for response. defaults to 1.
 	ResponseTimeout uint32
+	// wait time after first command response to check if multiple packets arrive.
+	// defaults. 0.5s
+	MultiResponseTimeout uint32
 	// Time in seconds between sending a heartbeat when no commands are being sent. defaults 5
 	HeartBeatTimer uint32
 }
@@ -28,6 +32,12 @@ func (bec BattleEyeConfig) GetConfig() BattleEyeConfig {
 type BeConfig interface {
 	GetConfig() BattleEyeConfig
 }
+type transmission struct {
+	packet   []byte
+	sequence byte
+	sent     time.Time
+	w        io.Writer
+}
 
 //--------------------------------------------------
 
@@ -36,18 +46,33 @@ type battleEye struct {
 
 	// Passed in config
 
-	password        string
-	addr            *net.UDPAddr
-	connTimeout     uint32
-	responseTimeout uint32
-	heartbeatTimer  uint32
+	password             string
+	addr                 *net.UDPAddr
+	connTimeout          uint32
+	responseTimeout      uint32
+	multiResponseTimeout uint32
+	heartbeatTimer       uint32
+
 	// Sequence byte to determine the packet we are up to in the chain.
-	sequence   byte
-	chatWriter *io.Writer
+	sequence struct {
+		sync.Locker
+		n byte
+	}
+	chatWriter  *io.Writer
+	writebuffer []byte
 
 	conn              *net.UDPConn
-	lastCommandPacket time.Time
-	running           bool
+	lastCommandPacket struct {
+		sync.Locker
+		time.Time
+	}
+	running bool
+	wg      sync.WaitGroup
+
+	// use this to unlock before reading.
+	// and match reads to waiting confirms to purge this list.
+	// or possibly resend
+	packetQueue []transmission
 }
 
 // Creates and Returns a new Client
@@ -70,15 +95,48 @@ func New(config BeConfig) *battleEye {
 		connTimeout:     cfg.ConnTimeout,
 		responseTimeout: cfg.ResponseTimeout,
 		heartbeatTimer:  cfg.HeartBeatTimer,
+		writebuffer:     make([]byte, 4096),
 	}
+
 }
 
 // Not Implemented
-func (be *battleEye) SendCommand(command []byte) error {
+func (be *battleEye) SendCommand(command []byte, w io.Writer) error {
+	be.sequence.Lock()
+	sequence := be.sequence.n
+	// increment the sending packet.
+	if be.sequence.n == 255 {
+		be.sequence.n = 0
+	} else {
+		be.sequence.n++
+	}
+	be.sequence.Unlock()
+
+	packet := buildCommandPacket(command, sequence)
+	be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
+	be.conn.Write(packet)
+
+	be.lastCommandPacket.Lock()
+	be.lastCommandPacket.Time = time.Now()
+	be.lastCommandPacket.Unlock()
+
+	/*
+		be.conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
+
+		// have to somehow look for multi Packet with this shit,
+		// and handle when i am reading irelevent information.
+		n, err := be.conn.Read(be.writebuffer)
+		if err != nil {
+			return err
+		}
+		w.Write(be.writebuffer[:n])
+	*/
+
 	return nil
 }
 
 func (be *battleEye) Connect() (bool, error) {
+	be.wg = sync.WaitGroup{}
 	var err error
 	// dial the Address
 	be.conn, err = net.DialUDP("udp", nil, be.addr)
@@ -94,6 +152,10 @@ func (be *battleEye) Connect() (bool, error) {
 	be.conn.Write(buildConnectionPacket(be.password))
 	// Read connection and hope it doesn't time out and the server responds
 	n, err := be.conn.Read(packet)
+	// check if this is a timeout error.
+	if err, ok := err.(net.Error); ok && err.Timeout() {
+		return false, errors.New("Connection Timed Out")
+	}
 	if err != nil {
 		return false, err
 	}
@@ -102,16 +164,43 @@ func (be *battleEye) Connect() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	if result == packetResponse.LOGIN_FAIL {
 		return false, nil
 	}
+
 	// nothing has failed we are good to go :).
+	// Spin up a go routine to read back on a connection
+	be.wg.Add(1)
+	//go
 	return true, nil
+}
+
+func (be *battleEye) updateLoop() {
+	defer be.wg.Done()
+	for {
+		if be.conn == nil {
+			return
+		}
+		t := time.Now()
+
+		be.lastCommandPacket.Lock()
+		if t.After(be.lastCommandPacket.Add(time.Second * time.Duration(be.heartbeatTimer))) {
+			err := be.SendCommand([]byte{}, ioutil.Discard)
+			if err != nil {
+				return
+			}
+			be.lastCommandPacket.Time = t
+		}
+		be.lastCommandPacket.Unlock()
+
+	}
 }
 
 func (be *battleEye) Disconnect() error {
 	// maybe also close the main loop and wait for that?
 	be.conn.Close()
+	be.wg.Wait()
 	return nil
 }
 
@@ -127,21 +216,4 @@ func checkLogin(packet []byte) (byte, error) {
 	// now check if we got a success or a fail
 	// 2 byte prefix. 4 byte checksum. 1 byte terminate header. 1 byte login type. 1 byte result
 	return packet[8], err
-}
-
-func (be *battleEye) ReadPacketLoop(ch chan []byte) {
-	data := make([]byte, 4096)
-	be.conn.SetReadBuffer(4096)
-	for {
-		be.conn.SetReadDeadline(time.Now().Add(time.Second))
-		count, err := be.conn.Read(data)
-		fmt.Println("Read:", data[:count])
-		if err != nil {
-			fmt.Println("Failed to read from connection:", err)
-			return
-		}
-		fmt.Println("Recieved Packet")
-		go func() { ch <- data[:count] }()
-		return
-	}
 }
