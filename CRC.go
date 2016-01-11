@@ -8,7 +8,7 @@ import (
 func getCheckSumFromBEPacket(data []byte) (uint32, error) {
 	notValidString := "Data not a Valid BE HEader: "
 	// check the data is minimum the size of a BE header
-	if len(data) != 7 {
+	if len(data) < 7 {
 		return 0, errors.New(notValidString + "Header Size Not Valid")
 	}
 	if data[0] != 'B' || data[1] != 'E' {
@@ -31,4 +31,12 @@ func dataMatchesCheckSum(data []byte, Checksum uint32) bool {
 
 func makeChecksum(data []byte) uint32 {
 	return crc32.ChecksumIEEE(data)
+}
+
+func PacketMatchesChecksum(data []byte) (bool, error) {
+	cs, err := getCheckSumFromBEPacket(data)
+	if err != nil {
+		return false, err
+	}
+	return crc32.ChecksumIEEE(data[6:]) == cs, nil
 }

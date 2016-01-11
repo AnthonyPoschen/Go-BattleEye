@@ -4,20 +4,21 @@ package BattleEye
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
-	"sync"
 	"time"
 )
 
 // Config File
 type BattleEyeConfig struct {
-	Host     string
-	Port     string
+	addr     *net.UDPAddr
 	Password string
-	PollFreq struct {
-		Chat int
-		Bans int
-	}
+	// time in seconds to wait for a response. defaults to 2.
+	ConnTimeout uint32
+	// time in seconds to wait for response. defaults to 1.
+	ResponseTimeout uint32
+	// Time in seconds between sending a heartbeat when no commands are being sent. defaults 5
+	HeartBeatTimer uint32
 }
 
 func (bec BattleEyeConfig) GetConfig() BattleEyeConfig {
@@ -28,100 +29,104 @@ type BeConfig interface {
 	GetConfig() BattleEyeConfig
 }
 
-type ban struct {
-	GUID     string
-	Duration uint32
-	Reason   string
-}
-
 //--------------------------------------------------
 
 // This Struct holds the State of the connection and all commands
 type battleEye struct {
-	// IP Address to connect too
-	host string
-	// Port to Connect too
-	port string
-	// RCON Password
-	password string
 
-	finish   chan struct{}
-	packet   chan []byte
-	done     sync.WaitGroup
-	conn     *net.UDPConn
-	running  bool
-	sequence byte
-	chat     []string
-	bans     []ban
+	// Passed in config
+
+	password        string
+	addr            *net.UDPAddr
+	connTimeout     uint32
+	responseTimeout uint32
+	heartbeatTimer  uint32
+	// Sequence byte to determine the packet we are up to in the chain.
+	sequence   byte
+	chatWriter *io.Writer
+
+	conn              *net.UDPConn
+	lastCommandPacket time.Time
+	running           bool
 }
 
-// Blocking function will not return until closed with Stop.
-func (be *battleEye) Run() {
-	// setup for running
-	be.finish = make(chan struct{})
-	be.packet = make(chan []byte)
-	defer close(be.packet)
-	be.done.Add(1)
-	defer be.done.Done()
+// Creates and Returns a new Client
+func New(config BeConfig) *battleEye {
+	// setup all variables
+	cfg := config.GetConfig()
+	if cfg.ConnTimeout == 0 {
+		cfg.ConnTimeout = 2
+	}
+	if cfg.ResponseTimeout == 0 {
+		cfg.ResponseTimeout = 1
+	}
+	if cfg.HeartBeatTimer == 0 {
+		cfg.HeartBeatTimer = 5
+	}
 
-	// need to setup actual work channels.
+	return &battleEye{
+		password:        cfg.Password,
+		addr:            cfg.addr,
+		connTimeout:     cfg.ConnTimeout,
+		responseTimeout: cfg.ResponseTimeout,
+		heartbeatTimer:  cfg.HeartBeatTimer,
+	}
+}
+
+// Not Implemented
+func (be *battleEye) SendCommand(command []byte) error {
+	return nil
+}
+
+func (be *battleEye) Connect() (bool, error) {
 	var err error
-	var addr *net.UDPAddr
-
-	addr, err = net.ResolveUDPAddr("udp", be.host+":"+be.port)
-
-	be.conn, err = net.DialUDP("udp", nil, addr)
-
+	// dial the Address
+	be.conn, err = net.DialUDP("udp", nil, be.addr)
 	if err != nil {
-		fmt.Println("error Connecting:", err)
-		return
+		return false, err
 	}
-	defer be.conn.Close()
-	// dont set Update packet yet so it stays blocking till we connect
-	var UpdatePacket <-chan time.Time
-	ConnectTimer := time.After(time.Millisecond)
-	be.running = true
-	newPacketArrived := make(chan []byte)
-	be.conn.SetWriteBuffer(4096)
-	//be.conn.WriteMsgUDP(b, oob, addr)
-loop:
-	for {
+	// make a buffer to read the packet packed with extra space
+	packet := make([]byte, 9)
 
-		select {
-		case packet := <-newPacketArrived:
-			fmt.Println(packet)
-		// need to create case's for doing actual work.
-		case <-ConnectTimer:
-			// send a connect packet
-			be.conn.Write(buildConnectionPacket(be.password))
-			be.ReadPacketLoop(newPacketArrived)
-		case <-UpdatePacket:
-			UpdatePacket = time.After(time.Second * 5)
-			// do Update Packet
-		// if called to exit do the following.
-		case _, ok := <-be.finish:
-			if ok == false {
-				// signal services to break
-				// i never knew you could break labels - Quality of life improved
-				break loop
-			}
-		}
-
+	// set timeout deadline so we dont block forever
+	be.conn.SetReadDeadline(time.Now().Add(time.Second * 2))
+	// Send a Connection Packet
+	be.conn.Write(buildConnectionPacket(be.password))
+	// Read connection and hope it doesn't time out and the server responds
+	n, err := be.conn.Read(packet)
+	if err != nil {
+		return false, err
 	}
 
-	// signals we are finished
-
+	result, err := checkLogin(packet[:n])
+	if err != nil {
+		return false, err
+	}
+	if result == packetResponse.LOGIN_FAIL {
+		return false, nil
+	}
+	// nothing has failed we are good to go :).
+	return true, nil
 }
 
-// Will stop the running connection
-func (be *battleEye) Stop() {
-	close(be.finish)
-	be.done.Wait()
-	be.running = false
+func (be *battleEye) Disconnect() error {
+	// maybe also close the main loop and wait for that?
+	be.conn.Close()
+	return nil
 }
 
-func (be *battleEye) IsRunning() bool {
-	return be.running
+func checkLogin(packet []byte) (byte, error) {
+	var err error = nil
+	if len(packet) != 9 {
+		return 0, errors.New("Packet Size Invalid for Response")
+	}
+	// check if we have a valid packet
+	if match, err := PacketMatchesChecksum(packet); match == false || err != nil {
+		return 0, err
+	}
+	// now check if we got a success or a fail
+	// 2 byte prefix. 4 byte checksum. 1 byte terminate header. 1 byte login type. 1 byte result
+	return packet[8], err
 }
 
 func (be *battleEye) ReadPacketLoop(ch chan []byte) {
@@ -139,42 +144,4 @@ func (be *battleEye) ReadPacketLoop(ch chan []byte) {
 		go func() { ch <- data[:count] }()
 		return
 	}
-}
-
-// Creates and Returns a new Client
-func New(config BeConfig) *battleEye {
-	// setup all variables
-	cfg := config.GetConfig()
-	BE := battleEye{host: cfg.Host, port: cfg.Port, password: cfg.Password}
-	BE.chat = make([]string, 0)
-	return &BE
-}
-
-func (be *battleEye) SendCommand(command []byte) error {
-	return nil
-}
-
-// returns a copy of the current chat that has been sent from battlEye since the last clear.
-func (be *battleEye) GetChat() ([]string, error) {
-	if be.chat == nil {
-		return []string{}, errors.New("Chat not initilised")
-	}
-	return be.chat, nil
-}
-
-// Clears the chat. this becomes very useful for any server wanting to perform information based on chat responses.
-// once procesed you can then remove the messages by calling clear.
-func (be *battleEye) ClearChat() error {
-	if be.chat == nil {
-		return errors.New("Chat not initilised")
-	}
-	be.chat = nil
-	return nil
-}
-
-func (be *battleEye) GetBans() ([]ban, error) {
-	if be.bans == nil {
-		return []ban{}, errors.New("Bans not initilised")
-	}
-	return be.bans, nil
 }

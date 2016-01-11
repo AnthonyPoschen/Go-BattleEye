@@ -3,7 +3,6 @@ package BattleEye
 import (
 	"encoding/binary"
 	"testing"
-	"time"
 )
 
 func Test_StartAndStop(t *testing.T) {
@@ -50,23 +49,4 @@ func Test_BuildHeader(t *testing.T) {
 			t.Error("Header Signature Not Correct")
 		}
 	}
-}
-
-func Test_LiveServer(t *testing.T) {
-	be := New(&BattleEyeConfig{Host: "127.0.0.1", Port: "2302", Password: "admin"})
-	//packet := buildConnectionPacket(be.password)
-
-	//fmt.Println(binary.LittleEndian.Uint32(packet[3:7]))
-	//fmt.Println(binary.LittleEndian.Uint32([]byte{37, 111, 118, 65}))
-	go be.Run()
-
-	//laddr, _ := net.ResolveUDPAddr("udp4", "127.0.0.1:5050")
-	//conn, _ := net.ListenUDP("udp4", laddr)
-	//by := make([]byte, 500)
-	//i, _, _ := conn.ReadFrom(by)
-	//fmt.Println(by[:i])
-
-	<-time.After(time.Second * 3)
-	go be.Stop()
-
 }
