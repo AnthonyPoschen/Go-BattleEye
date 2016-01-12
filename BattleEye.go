@@ -194,9 +194,29 @@ func (be *battleEye) updateLoop() {
 		}
 		be.lastCommandPacket.Unlock()
 
+		// do check for new incoming data
+		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+		n , err := be.conn.Read(be.writebuffer)
+		if err != nil {
+			continue
+		}
+		data := be.writebuffer[:n]
+		be.processPacket(data)
 	}
 }
+func (be *battleEye) processPacket(data []byte) {
+		// validate packet is good. 
 
+		// remove header
+
+		// if say command write and leave
+
+		// else for command check if we expect more packets and how many. 
+
+		// process the packet if we have no more
+
+		// loop till we have all the messages and i guess send confirms back.
+}
 func (be *battleEye) Disconnect() error {
 	// maybe also close the main loop and wait for that?
 	be.conn.Close()
