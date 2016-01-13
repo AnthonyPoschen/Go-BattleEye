@@ -33,7 +33,7 @@ func makeChecksum(data []byte) uint32 {
 	return crc32.ChecksumIEEE(data)
 }
 
-func PacketMatchesChecksum(data []byte) (bool, error) {
+func packetMatchesChecksum(data []byte) (bool, error) {
 	cs, err := getCheckSumFromBEPacket(data)
 	if err != nil {
 		return false, err

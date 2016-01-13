@@ -21,21 +21,21 @@ func buildPacket(data []byte, PacketType byte) []byte {
 }
 
 func buildConnectionPacket(pass string) []byte {
-	return buildPacket([]byte(pass), packetType.LOGIN)
+	return buildPacket([]byte(pass), packetType.Login)
 }
 
 func buildCommandPacket(command []byte, sequence uint8) []byte {
-	return buildPacket(append([]byte{sequence}, command...), packetType.COMMAND)
+	return buildPacket(append([]byte{sequence}, command...), packetType.Command)
 }
 
 // Note sure if this command packet heartbeat needs to keep track of sequence or not. but thanks battle eye ill presume
 // it does since it asks for a 2 byte empty command
 func buildHeartBeatPacket(sequence uint8) []byte {
-	return buildPacket([]byte{sequence}, packetType.COMMAND)
+	return buildPacket([]byte{sequence}, packetType.Command)
 }
 
 func buildMessageAckPacket(sequence uint8) []byte {
-	return buildPacket([]byte{sequence}, packetType.SERVER_MESSAGE)
+	return buildPacket([]byte{sequence}, packetType.ServerMessage)
 }
 
 //This function takes in a data packet and returns the type of packet recieved

@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Config File
-type BattleEyeConfig struct {
+// Config documentation
+type Config struct {
 	addr     *net.UDPAddr
 	Password string
 	// time in seconds to wait for a response. defaults to 2.
@@ -25,12 +25,15 @@ type BattleEyeConfig struct {
 	HeartBeatTimer uint32
 }
 
-func (bec BattleEyeConfig) GetConfig() BattleEyeConfig {
+// GetConfig Returns the config to satisfy the interface for setting up a new battleeye connection
+func (bec Config) GetConfig() Config {
 	return bec
 }
 
+// BeConfig is the interface for passing in a configuration for the client.
+// this allows other types to be implemented that also contain the type desired
 type BeConfig interface {
-	GetConfig() BattleEyeConfig
+	GetConfig() Config
 }
 type transmission struct {
 	packet   []byte
@@ -75,7 +78,7 @@ type battleEye struct {
 	packetQueue []transmission
 }
 
-// Creates and Returns a new Client
+// New Creates and Returns a new Client
 func New(config BeConfig) *battleEye {
 	// setup all variables
 	cfg := config.GetConfig()
@@ -165,7 +168,7 @@ func (be *battleEye) Connect() (bool, error) {
 		return false, err
 	}
 
-	if result == packetResponse.LOGIN_FAIL {
+	if result == packetResponse.LoginFail {
 		return false, nil
 	}
 
@@ -196,7 +199,7 @@ func (be *battleEye) updateLoop() {
 
 		// do check for new incoming data
 		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
-		n , err := be.conn.Read(be.writebuffer)
+		n, err := be.conn.Read(be.writebuffer)
 		if err != nil {
 			continue
 		}
@@ -205,17 +208,17 @@ func (be *battleEye) updateLoop() {
 	}
 }
 func (be *battleEye) processPacket(data []byte) {
-		// validate packet is good. 
+	// validate packet is good.
 
-		// remove header
+	// remove header
 
-		// if say command write and leave
+	// if say command write and leave
 
-		// else for command check if we expect more packets and how many. 
+	// else for command check if we expect more packets and how many.
 
-		// process the packet if we have no more
+	// process the packet if we have no more
 
-		// loop till we have all the messages and i guess send confirms back.
+	// loop till we have all the messages and i guess send confirms back.
 }
 func (be *battleEye) Disconnect() error {
 	// maybe also close the main loop and wait for that?
@@ -225,12 +228,12 @@ func (be *battleEye) Disconnect() error {
 }
 
 func checkLogin(packet []byte) (byte, error) {
-	var err error = nil
+	var err error
 	if len(packet) != 9 {
 		return 0, errors.New("Packet Size Invalid for Response")
 	}
 	// check if we have a valid packet
-	if match, err := PacketMatchesChecksum(packet); match == false || err != nil {
+	if match, err := packetMatchesChecksum(packet); match == false || err != nil {
 		return 0, err
 	}
 	// now check if we got a success or a fail
