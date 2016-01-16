@@ -16,21 +16,29 @@ func Test_stripHeader(t *testing.T) {
 }
 
 func Test_getSequenceFromPacket(t *testing.T) {
-	sequence := byte(255)
 
-	tests := []struct{test []byte,
-		expected byte,
-	} {
+	var tests = []struct {
+		test     []byte
+		expected byte
+	}{
 		{
-
-			},
-			{
-
-			}
+			test:     []byte{'B', 'E', 1, 1, 1, 1, 0, 1, 255, 10, 5, 2, 82},
+			expected: 255,
+		},
+		{
+			test:     []byte{'B', 'E', 1, 1, 1, 1, 0, 1, 85},
+			expected: 85,
+		},
 	}
-	packet := []byte{'B','E',1,1,1,1,0,1,sequence,10,5,2,82}
-	packet2 := []byte{'B','E',1,1,1,1,0,1,sequence}
 
-	result , err := getSequenceFromPacket(packet)
-	if err != nil
+	for _, v := range tests {
+		result, err := getSequenceFromPacket(v.test)
+		if err != nil {
+			t.Error("Test:", v.test, "Failed due to error:", err)
+		}
+		if result != v.expected {
+			t.Error("Expected:", v.expected, "Got:", result)
+		}
+	}
+
 }
