@@ -44,8 +44,8 @@ type transmission struct {
 
 //--------------------------------------------------
 
-// This Struct holds the State of the connection and all commands
-type battleEye struct {
+// BattleEye must do doco soon
+type BattleEye struct {
 
 	// Passed in config
 
@@ -79,7 +79,7 @@ type battleEye struct {
 }
 
 // New Creates and Returns a new Client
-func New(config BeConfig) *battleEye {
+func New(config BeConfig) *BattleEye {
 	// setup all variables
 	cfg := config.GetConfig()
 	if cfg.ConnTimeout == 0 {
@@ -92,7 +92,7 @@ func New(config BeConfig) *battleEye {
 		cfg.HeartBeatTimer = 5
 	}
 
-	return &battleEye{
+	return &BattleEye{
 		password:        cfg.Password,
 		addr:            cfg.addr,
 		connTimeout:     cfg.ConnTimeout,
@@ -103,8 +103,10 @@ func New(config BeConfig) *battleEye {
 
 }
 
-// Not Implemented
-func (be *battleEye) SendCommand(command []byte, w io.Writer) error {
+// SendCommand takes a byte array of a command string i.e 'ban xyz' and a io.Writer, it will
+// Make sure the server recieves the command by retrying if needed and write the response to the writer.
+// if no response is recieved then a response has not yet been recieved. a empty write
+func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
 	be.sequence.Lock()
 	sequence := be.sequence.n
 	// increment the sending packet.
@@ -138,7 +140,9 @@ func (be *battleEye) SendCommand(command []byte, w io.Writer) error {
 	return nil
 }
 
-func (be *battleEye) Connect() (bool, error) {
+// Connect attempts to establish a connection with the BattlEye Rcon server and if it works it then sets up a loop in a goroutine
+// to recieve all callbacks.
+func (be *BattleEye) Connect() (bool, error) {
 	be.wg = sync.WaitGroup{}
 	var err error
 	// dial the Address
@@ -179,7 +183,7 @@ func (be *battleEye) Connect() (bool, error) {
 	return true, nil
 }
 
-func (be *battleEye) updateLoop() {
+func (be *BattleEye) updateLoop() {
 	defer be.wg.Done()
 	for {
 		if be.conn == nil {
@@ -207,10 +211,25 @@ func (be *battleEye) updateLoop() {
 		be.processPacket(data)
 	}
 }
-func (be *battleEye) processPacket(data []byte) {
+func (be *BattleEye) processPacket(data []byte) {
 	// validate packet is good.
+	checksum, err := getCheckSumFromBEPacket(data)
+	if err != nil {
+		return
+	}
 
-	// remove header
+	_, err = responseType(data)
+	if err != nil {
+		return
+	}
+
+	match := dataMatchesCheckSum(data, checksum)
+	// if invalid data for checksum we got something corrupt
+	if !match {
+		return
+	}
+
+	// Strip Header
 
 	// if say command write and leave
 
@@ -220,7 +239,9 @@ func (be *battleEye) processPacket(data []byte) {
 
 	// loop till we have all the messages and i guess send confirms back.
 }
-func (be *battleEye) Disconnect() error {
+
+// Disconnect shuts down the infinite loop to recieve packets and closes the connection
+func (be *BattleEye) Disconnect() error {
 	// maybe also close the main loop and wait for that?
 	be.conn.Close()
 	be.wg.Wait()

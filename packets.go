@@ -46,3 +46,18 @@ func responseType(data []byte) (byte, error) {
 	// 7th element will be the first element after the header which will be the packet type
 	return data[7], nil
 }
+
+func stripHeader(data []byte) ([]byte, error) {
+	if len(data) < 8 {
+		return []byte{}, errors.New("Size to small, Non valid header")
+	}
+
+	return data[8:], nil
+}
+
+func getSequenceFromPacket(data []byte) (byte, error) {
+	if len(data) < 9 {
+		return 0, errors.New("Packet to small no Sequence Stored")
+	}
+	return data[8], nil
+}
