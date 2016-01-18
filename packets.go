@@ -61,3 +61,15 @@ func getSequenceFromPacket(data []byte) (byte, error) {
 	}
 	return data[8], nil
 }
+
+// Returns TotalPackets , CurrentPacket , IsMultiPacket
+func checkMultiPacketResponse(data []byte) (byte, byte, bool) {
+	if len(data) < 3 {
+		return 0, 0, false
+	}
+	if data[0] != 0x00 {
+		return 0, 0, false
+	}
+
+	return data[1], data[2], true
+}

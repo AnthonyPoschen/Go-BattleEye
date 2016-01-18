@@ -61,7 +61,7 @@ type BattleEye struct {
 		sync.Locker
 		n byte
 	}
-	chatWriter  *io.Writer
+	chatWriter  io.Writer
 	writebuffer []byte
 
 	conn              *net.UDPConn
@@ -75,7 +75,10 @@ type BattleEye struct {
 	// use this to unlock before reading.
 	// and match reads to waiting confirms to purge this list.
 	// or possibly resend
-	packetQueue []transmission
+	packetQueue struct {
+		sync.Locker
+		queue []transmission
+	}
 }
 
 // New Creates and Returns a new Client
@@ -218,7 +221,7 @@ func (be *BattleEye) processPacket(data []byte) {
 		return
 	}
 
-	_, err = responseType(data)
+	pType, err := responseType(data)
 	if err != nil {
 		return
 	}
@@ -228,16 +231,55 @@ func (be *BattleEye) processPacket(data []byte) {
 	if !match {
 		return
 	}
+	// Get Sequence
+	sequence, err := getSequenceFromPacket(data)
+	if err != nil {
+		return
+	}
 
 	// Strip Header
-
-	// if say command write and leave
+	content, err := stripHeader(data)
+	if err != nil {
+		// maybe should log this shit somewhere
+		return
+	}
+	// if say command write acknoledge and leave
+	if pType == packetType.ServerMessage {
+		be.sequence.Lock()
+		if sequence >= be.sequence.n {
+			// not sure how byte overflow is handled in golang... not sure if it would roll over to 0 or throw and error.
+			if sequence == 255 {
+				be.sequence.n = 0x00
+			} else {
+				be.sequence.n = sequence + 1
+			}
+		}
+		be.sequence.Unlock()
+		be.chatWriter.Write(content)
+		// we must acknoledge we recieved this first
+		be.conn.Write(buildPacket([]byte{sequence}, packetType.ServerMessage))
+		return
+	}
 
 	// else for command check if we expect more packets and how many.
-
-	// process the packet if we have no more
-
+	if pType != packetType.Command {
+		return
+	}
+	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content)
+	// process the packet if it is not a multipacket
+	if !isMultiPacket {
+		be.handleResponseToQueue(sequence, content[2:])
+	}
 	// loop till we have all the messages and i guess send confirms back.
+	for ; packetCount < currentPacket; packetCount++ {
+		be.conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, err := be.conn.Read(be.writebuffer)
+		if err != nil {
+			return
+		}
+		p := be.writebuffer[:n]
+
+	}
 }
 
 // Disconnect shuts down the infinite loop to recieve packets and closes the connection
@@ -260,4 +302,17 @@ func checkLogin(packet []byte) (byte, error) {
 	// now check if we got a success or a fail
 	// 2 byte prefix. 4 byte checksum. 1 byte terminate header. 1 byte login type. 1 byte result
 	return packet[8], err
+}
+
+func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte) {
+	be.packetQueue.Lock()
+	for k, v := range be.packetQueue.queue {
+		if v.sequence == sequence {
+			v.w.Write(response)
+
+			be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
+			break
+		}
+	}
+	be.packetQueue.Unlock()
 }
