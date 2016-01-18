@@ -39,7 +39,7 @@ type transmission struct {
 	packet   []byte
 	sequence byte
 	sent     time.Time
-	w        io.Writer
+	w        io.WriteCloser
 }
 
 //--------------------------------------------------
@@ -269,6 +269,7 @@ func (be *BattleEye) processPacket(data []byte) {
 		be.handleResponseToQueue(seq, cont[2:], true)
 
 	}
+	//closes it as we know we have done our job
 	be.handleResponseToQueue(sequence, []byte{}, false)
 	// now that we have goten all the packets we are after and writen them to the buffer lets return the result.
 }
@@ -301,9 +302,9 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 		if v.sequence == sequence {
 			v.w.Write(response)
 			if !moreToCome {
+				v.w.Close()
 				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
 			}
-
 			break
 		}
 	}
