@@ -215,30 +215,8 @@ func (be *BattleEye) updateLoop() {
 	}
 }
 func (be *BattleEye) processPacket(data []byte) {
-	// validate packet is good.
-	checksum, err := getCheckSumFromBEPacket(data)
-	if err != nil {
-		return
-	}
+	sequence, content, pType, err := verifyPacket(data)
 
-	pType, err := responseType(data)
-	if err != nil {
-		return
-	}
-
-	match := dataMatchesCheckSum(data, checksum)
-	// if invalid data for checksum we got something corrupt
-	if !match {
-		return
-	}
-	// Get Sequence
-	sequence, err := getSequenceFromPacket(data)
-	if err != nil {
-		return
-	}
-
-	// Strip Header
-	content, err := stripHeader(data)
 	if err != nil {
 		// maybe should log this shit somewhere
 		return
@@ -268,7 +246,8 @@ func (be *BattleEye) processPacket(data []byte) {
 	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content)
 	// process the packet if it is not a multipacket
 	if !isMultiPacket {
-		be.handleResponseToQueue(sequence, content[2:])
+		be.handleResponseToQueue(sequence, content[2:], false)
+		return
 	}
 	// loop till we have all the messages and i guess send confirms back.
 	for ; packetCount < currentPacket; packetCount++ {
@@ -277,9 +256,21 @@ func (be *BattleEye) processPacket(data []byte) {
 		if err != nil {
 			return
 		}
+		// lets re verify this entire thing
 		p := be.writebuffer[:n]
+		seq, cont, _, err := verifyPacket(p)
+		if err != nil {
+			return
+		}
+		if seq != sequence {
+			be.processPacket(p)
+			packetCount--
+		}
+		be.handleResponseToQueue(seq, cont[2:], true)
 
 	}
+	be.handleResponseToQueue(sequence, []byte{}, false)
+	// now that we have goten all the packets we are after and writen them to the buffer lets return the result.
 }
 
 // Disconnect shuts down the infinite loop to recieve packets and closes the connection
@@ -304,15 +295,42 @@ func checkLogin(packet []byte) (byte, error) {
 	return packet[8], err
 }
 
-func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte) {
+func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreToCome bool) {
 	be.packetQueue.Lock()
 	for k, v := range be.packetQueue.queue {
 		if v.sequence == sequence {
 			v.w.Write(response)
+			if !moreToCome {
+				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
+			}
 
-			be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
 			break
 		}
 	}
 	be.packetQueue.Unlock()
+}
+
+func verifyPacket(data []byte) (sequence byte, content []byte, pType byte, err error) {
+	checksum, err := getCheckSumFromBEPacket(data)
+	if err != nil {
+		return
+	}
+
+	match := dataMatchesCheckSum(data, checksum)
+	if !match {
+		err = errors.New("Checksum does not match data")
+		return
+	}
+	sequence, err = getSequenceFromPacket(data)
+	if err != nil {
+		return
+	}
+
+	content, err = stripHeader(data)
+	if err != nil {
+		return
+	}
+	pType, err = responseType(data)
+
+	return
 }
