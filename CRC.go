@@ -20,7 +20,7 @@ func getCheckSumFromBEPacket(data []byte) (uint32, error) {
 
 	// little endian uint32. lets hope its fucking correct fucking battleeye not listing shit in protocol
 	// it should because other tools are in little i had to go verify this ffs.
-	result := uint32(data[3]) | uint32(data[4])<<8 | uint32(data[5])<<16 | uint32(data[6])<<24
+	result := uint32(data[2]) | uint32(data[3])<<8 | uint32(data[4])<<16 | uint32(data[5])<<24
 	return result, nil
 }
 
