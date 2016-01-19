@@ -39,7 +39,7 @@ type transmission struct {
 	packet   []byte
 	sequence byte
 	sent     time.Time
-	w        io.WriteCloser
+	w        io.Writer
 }
 
 //--------------------------------------------------
@@ -123,22 +123,11 @@ func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
 	packet := buildCommandPacket(command, sequence)
 	be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
 	be.conn.Write(packet)
-
+	be.packetQueue.Lock()
+	be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: packet, sequence: sequence, sent: time.Now(), w: w})
 	be.lastCommandPacket.Lock()
 	be.lastCommandPacket.Time = time.Now()
 	be.lastCommandPacket.Unlock()
-
-	/*
-		be.conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
-
-		// have to somehow look for multi Packet with this shit,
-		// and handle when i am reading irelevent information.
-		n, err := be.conn.Read(be.writebuffer)
-		if err != nil {
-			return err
-		}
-		w.Write(be.writebuffer[:n])
-	*/
 
 	return nil
 }
@@ -302,7 +291,7 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 		if v.sequence == sequence {
 			v.w.Write(response)
 			if !moreToCome {
-				v.w.Close()
+				//v.w.Close()
 				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
 			}
 			break
