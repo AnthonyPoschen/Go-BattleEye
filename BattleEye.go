@@ -203,12 +203,14 @@ func (be *BattleEye) updateLoop() {
 		be.processPacket(data)
 	}
 }
-func (be *BattleEye) processPacket(data []byte) {
+func (be *BattleEye) processPacket(data []byte) error {
 	sequence, content, pType, err := verifyPacket(data)
 
 	if err != nil {
 		// maybe should log this shit somewhere
-		return
+		//fmt.Println("")
+		//fmt.Errorf(format, ...)
+		return err
 	}
 	// if say command write acknoledge and leave
 	if pType == packetType.ServerMessage {
@@ -224,32 +226,35 @@ func (be *BattleEye) processPacket(data []byte) {
 		be.sequence.Unlock()
 		be.chatWriter.Write(content)
 		// we must acknoledge we recieved this first
-		be.conn.Write(buildPacket([]byte{sequence}, packetType.ServerMessage))
-		return
+		if be.conn != nil {
+			be.conn.Write(buildPacket([]byte{sequence}, packetType.ServerMessage))
+		}
+
+		return nil
 	}
 
 	// else for command check if we expect more packets and how many.
 	if pType != packetType.Command {
-		return
+		return errors.New("Unknown way to respond to packet type: " + string(pType))
 	}
 	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content)
 	// process the packet if it is not a multipacket
 	if !isMultiPacket {
 		be.handleResponseToQueue(sequence, content[2:], false)
-		return
+		return nil
 	}
 	// loop till we have all the messages and i guess send confirms back.
 	for ; packetCount < currentPacket; packetCount++ {
 		be.conn.SetReadDeadline(time.Now().Add(time.Second))
 		n, err := be.conn.Read(be.writebuffer)
 		if err != nil {
-			return
+			return err
 		}
 		// lets re verify this entire thing
 		p := be.writebuffer[:n]
 		seq, cont, _, err := verifyPacket(p)
 		if err != nil {
-			return
+			return err
 		}
 		if seq != sequence {
 			be.processPacket(p)
@@ -261,6 +266,7 @@ func (be *BattleEye) processPacket(data []byte) {
 	//closes it as we know we have done our job
 	be.handleResponseToQueue(sequence, []byte{}, false)
 	// now that we have goten all the packets we are after and writen them to the buffer lets return the result.
+	return nil
 }
 
 // Disconnect shuts down the infinite loop to recieve packets and closes the connection
@@ -305,8 +311,11 @@ func verifyPacket(data []byte) (sequence byte, content []byte, pType byte, err e
 	if err != nil {
 		return
 	}
-
-	match := dataMatchesCheckSum(data, checksum)
+	if len(data) < 6 {
+		err = errors.New("Packet size too small to have data")
+		return
+	}
+	match := dataMatchesCheckSum(data[6:], checksum)
 	if !match {
 		err = errors.New("Checksum does not match data")
 		return
