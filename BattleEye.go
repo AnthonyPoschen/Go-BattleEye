@@ -66,7 +66,7 @@ type BattleEye struct {
 
 	conn              *net.UDPConn
 	lastCommandPacket struct {
-		sync.Locker
+		sync.Mutex
 		time.Time
 	}
 	running bool
@@ -76,7 +76,7 @@ type BattleEye struct {
 	// and match reads to waiting confirms to purge this list.
 	// or possibly resend
 	packetQueue struct {
-		sync.Locker
+		sync.Mutex
 		queue []transmission
 	}
 }
@@ -295,7 +295,10 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 	be.packetQueue.Lock()
 	for k, v := range be.packetQueue.queue {
 		if v.sequence == sequence {
-			v.w.Write(response)
+			if v.w != nil {
+				v.w.Write(response)
+			}
+
 			if !moreToCome {
 				//v.w.Close()
 				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
