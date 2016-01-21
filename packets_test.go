@@ -10,7 +10,8 @@ func Test_stripHeader(t *testing.T) {
 
 		t.Fatal("Error on StripHeader:", err.Error())
 	}
-	if string(result) != cmd {
+	// chop off the command and sequence bytes
+	if string(result[2:]) != cmd {
 		t.Fatal("Expected:", cmd, "Got:", string(result))
 	}
 }

@@ -48,13 +48,20 @@ func responseType(data []byte) (byte, error) {
 }
 
 func stripHeader(data []byte) ([]byte, error) {
-	if len(data) < 8 {
+	if len(data) < 7 {
 		return []byte{}, errors.New("Size to small, Non valid header")
+	}
+
+	return data[6:], nil
+}
+
+func stripHeaderAndCommand(data []byte) ([]byte, error) {
+	if len(data) < 9 {
+		return []byte{}, errors.New("Size to small, Non valid Header")
 	}
 
 	return data[8:], nil
 }
-
 func getSequenceFromPacket(data []byte) (byte, error) {
 	if len(data) < 9 {
 		return 0, errors.New("Packet to small no Sequence Stored")

@@ -61,6 +61,10 @@ func Test_processPacket(t *testing.T) {
 			Packet:   buildCommandPacket([]byte{'f', 'u'}, 0x32),
 			Sequence: 0x32,
 		},
+		{
+			Packet:   buildCommandPacket([]byte{}, 0x45),
+			Sequence: 0x45,
+		},
 	}
 
 	be := BattleEye{}
