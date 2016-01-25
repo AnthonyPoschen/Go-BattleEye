@@ -12,7 +12,7 @@ import (
 
 // Config documentation
 type Config struct {
-	addr     *net.UDPAddr
+	Addr     *net.UDPAddr
 	Password string
 	// time in seconds to wait for a response. defaults to 2.
 	ConnTimeout uint32
@@ -97,7 +97,7 @@ func New(config BeConfig) *BattleEye {
 
 	return &BattleEye{
 		password:        cfg.Password,
-		addr:            cfg.addr,
+		addr:            cfg.Addr,
 		connTimeout:     cfg.ConnTimeout,
 		responseTimeout: cfg.ResponseTimeout,
 		heartbeatTimer:  cfg.HeartBeatTimer,
