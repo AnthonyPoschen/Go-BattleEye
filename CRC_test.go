@@ -8,7 +8,25 @@ import (
 )
 
 func Test_getCheckSumFromBEPacket(t *testing.T) {
+	var tests = []struct {
+		test     []byte
+		expected uint32
+	}{
+		{
+			test:     []byte{'B', 'E', 0, 1, 2, 3, 0xFF},
+			expected: (uint32(0) | uint32(1)<<8 | uint32(2)<<16 | uint32(3)<<24),
+		},
+	}
 
+	for _, v := range tests {
+		res, err := getCheckSumFromBEPacket(v.test)
+		if err != nil {
+			t.Error(err)
+		}
+		if res != v.expected {
+			t.Error("Expected:", v.expected, "Recieved:", res)
+		}
+	}
 }
 
 func Test_dataMatchesCheckSum(t *testing.T) {

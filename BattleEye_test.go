@@ -3,7 +3,6 @@ package BattleEye
 import (
 	"encoding/binary"
 	"testing"
-	"time"
 )
 
 func Test_StartAndStop(t *testing.T) {
@@ -52,21 +51,38 @@ func Test_BuildHeader(t *testing.T) {
 	}
 }
 
-func Test_LiveServer(t *testing.T) {
-	be := New(&BattleEyeConfig{Host: "127.0.0.1", Port: "2302", Password: "admin"})
-	//packet := buildConnectionPacket(be.password)
+func Test_processPacket(t *testing.T) {
 
-	//fmt.Println(binary.LittleEndian.Uint32(packet[3:7]))
-	//fmt.Println(binary.LittleEndian.Uint32([]byte{37, 111, 118, 65}))
-	go be.Run()
+	var tests = []struct {
+		Packet   []byte
+		Sequence byte
+	}{
+		{
+			Packet:   buildCommandPacket([]byte{'f', 'u'}, 0x32),
+			Sequence: 0x32,
+		},
+		{
+			Packet:   buildCommandPacket([]byte{}, 0x45),
+			Sequence: 0x45,
+		},
+	}
 
-	//laddr, _ := net.ResolveUDPAddr("udp4", "127.0.0.1:5050")
-	//conn, _ := net.ListenUDP("udp4", laddr)
-	//by := make([]byte, 500)
-	//i, _, _ := conn.ReadFrom(by)
-	//fmt.Println(by[:i])
+	be := BattleEye{}
+	for _, v := range tests {
+		be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: v.Packet, sequence: v.Sequence})
+	}
+	if len(be.packetQueue.queue) != len(tests) {
+		t.Error("BattlEye queue length wrong expected:", len(tests), "Got:", len(be.packetQueue.queue))
+	}
 
-	<-time.After(time.Second * 3)
-	go be.Stop()
+	for _, v := range tests {
+		err := be.processPacket(v.Packet)
+		if err != nil {
+			t.Error(err)
+		}
+	}
 
+	if len(be.packetQueue.queue) != 0 {
+		t.Error("Packet Queue not 0", be.packetQueue.queue)
+	}
 }
