@@ -3,6 +3,7 @@ package BattleEye
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
@@ -58,10 +59,13 @@ type BattleEye struct {
 
 	// Sequence byte to determine the packet we are up to in the chain.
 	sequence struct {
-		sync.Locker
+		sync.Mutex
 		n byte
 	}
-	chatWriter  io.Writer
+	chatWriter struct {
+		sync.Mutex
+		io.Writer
+	}
 	writebuffer []byte
 
 	conn              *net.UDPConn
@@ -119,12 +123,12 @@ func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
 		be.sequence.n++
 	}
 	be.sequence.Unlock()
-
 	packet := buildCommandPacket(command, sequence)
 	be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
 	be.conn.Write(packet)
 	be.packetQueue.Lock()
 	be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: packet, sequence: sequence, sent: time.Now(), w: w})
+	be.packetQueue.Unlock()
 	be.lastCommandPacket.Lock()
 	be.lastCommandPacket.Time = time.Now()
 	be.lastCommandPacket.Unlock()
@@ -171,7 +175,7 @@ func (be *BattleEye) Connect() (bool, error) {
 	// nothing has failed we are good to go :).
 	// Spin up a go routine to read back on a connection
 	be.wg.Add(1)
-	//go
+	go be.updateLoop()
 	return true, nil
 }
 
@@ -179,33 +183,39 @@ func (be *BattleEye) updateLoop() {
 	defer be.wg.Done()
 	for {
 		if be.conn == nil {
+			fmt.Println("Connection is NIL")
 			return
 		}
 		t := time.Now()
 
 		be.lastCommandPacket.Lock()
 		if t.After(be.lastCommandPacket.Add(time.Second * time.Duration(be.heartbeatTimer))) {
+			be.lastCommandPacket.Unlock()
 			err := be.SendCommand([]byte{}, ioutil.Discard)
 			if err != nil {
+				fmt.Println("Failed to send update Packet", err)
 				return
 			}
 			be.lastCommandPacket.Time = t
+		} else {
+			be.lastCommandPacket.Unlock()
 		}
-		be.lastCommandPacket.Unlock()
 
 		// do check for new incoming data
-		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond))
 		n, err := be.conn.Read(be.writebuffer)
 		if err != nil {
 			continue
 		}
 		data := be.writebuffer[:n]
-		be.processPacket(data)
+		if err := be.processPacket(data); err != nil {
+			fmt.Println(err)
+		}
+
 	}
 }
 func (be *BattleEye) processPacket(data []byte) error {
 	sequence, content, pType, err := verifyPacket(data)
-
 	if err != nil {
 		// maybe should log this shit somewhere
 		//fmt.Println("")
@@ -224,10 +234,18 @@ func (be *BattleEye) processPacket(data []byte) error {
 			}
 		}
 		be.sequence.Unlock()
-		be.chatWriter.Write(content)
+		be.chatWriter.Lock()
+		if be.chatWriter.Writer != nil {
+			be.chatWriter.Write(append(content[3:], []byte("\n")...))
+		}
+		be.chatWriter.Unlock()
 		// we must acknoledge we recieved this first
 		if be.conn != nil {
-			be.conn.Write(buildPacket([]byte{sequence}, packetType.ServerMessage))
+			be.conn.SetWriteDeadline(time.Now().Add(time.Millisecond * 100))
+			_, err := be.conn.Write(buildPacket([]byte{sequence}, packetType.ServerMessage))
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 
 		return nil
@@ -237,18 +255,32 @@ func (be *BattleEye) processPacket(data []byte) error {
 	if pType != packetType.Command {
 		return errors.New("Unknown way to respond to packet type: " + string(pType))
 	}
-	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content)
+	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content[1:])
+	//fmt.Println("sequence", sequence)
 	// process the packet if it is not a multipacket
 	if !isMultiPacket {
-		be.handleResponseToQueue(sequence, content[2:], false)
+		//fmt.Println("returning", sequence)
+		be.handleResponseToQueue(sequence, content[3:], false)
 		return nil
 	}
+
+	if currentPacket+1 < packetCount {
+		//fmt.Println("add")
+		be.handleResponseToQueue(sequence, content[6:], true)
+	} else {
+		//fmt.Println("finish")
+		be.handleResponseToQueue(sequence, content[6:], false)
+	}
+	return nil
 	// loop till we have all the messages and i guess send confirms back.
-	for ; packetCount < currentPacket; packetCount++ {
-		be.conn.SetReadDeadline(time.Now().Add(time.Second))
+	/*for ; currentPacket >= packetCount; currentPacket++ {
+		//fmt.Println("Is Multi Packet. Expecting", packetCount, "Current Packet", currentPacket)
+		fmt.Println("currentPacket", currentPacket)
+		be.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
 		n, err := be.conn.Read(be.writebuffer)
 		if err != nil {
-			return err
+			fmt.Println(err)
+			break
 		}
 		// lets re verify this entire thing
 		p := be.writebuffer[:n]
@@ -257,16 +289,19 @@ func (be *BattleEye) processPacket(data []byte) error {
 			return err
 		}
 		if seq != sequence {
+			fmt.Println("rehandling packet")
 			be.processPacket(p)
-			packetCount--
+			currentPacket--
 		}
-		be.handleResponseToQueue(seq, cont[2:], true)
+		be.handleResponseToQueue(seq, cont[5:], true)
 
 	}
 	//closes it as we know we have done our job
+	fmt.Println("finished", sequence)
 	be.handleResponseToQueue(sequence, []byte{}, false)
 	// now that we have goten all the packets we are after and writen them to the buffer lets return the result.
 	return nil
+	*/
 }
 
 // Disconnect shuts down the infinite loop to recieve packets and closes the connection
@@ -275,6 +310,13 @@ func (be *BattleEye) Disconnect() error {
 	be.conn.Close()
 	be.wg.Wait()
 	return nil
+}
+
+//SetChatWriter Sets a writer to write all chat messages too as they come in
+func (be *BattleEye) SetChatWriter(w io.Writer) {
+	be.chatWriter.Lock()
+	be.chatWriter.Writer = w
+	be.chatWriter.Unlock()
 }
 
 func checkLogin(packet []byte) (byte, error) {
@@ -296,7 +338,11 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 	for k, v := range be.packetQueue.queue {
 		if v.sequence == sequence {
 			if v.w != nil {
-				v.w.Write(response)
+				extra := []byte("\n")
+				if moreToCome {
+					extra = []byte{}
+				}
+				v.w.Write(append(response, extra...))
 			}
 
 			if !moreToCome {
