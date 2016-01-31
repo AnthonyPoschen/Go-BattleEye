@@ -234,6 +234,7 @@ func (be *BattleEye) processPacket(data []byte) error {
 			}
 		}
 		be.sequence.Unlock()
+		be.checkSequenceClash(sequence)
 		be.chatWriter.Lock()
 		if be.chatWriter.Writer != nil {
 			be.chatWriter.Write(append(content[3:], []byte("\n")...))
@@ -318,7 +319,17 @@ func (be *BattleEye) SetChatWriter(w io.Writer) {
 	be.chatWriter.Writer = w
 	be.chatWriter.Unlock()
 }
+func (be *BattleEye) checkSequenceClash(sequence byte) {
+	be.packetQueue.Lock()
+	for k, v := range be.packetQueue.queue {
+		if v.sequence == sequence {
+			go be.SendCommand(v.packet, v.w)
+			be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
+		}
 
+	}
+	be.packetQueue.Unlock()
+}
 func checkLogin(packet []byte) (byte, error) {
 	var err error
 	if len(packet) != 9 {
