@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// ErrTimeout is a timeout error and should be seen as
+// failing to establish a connection
+var ErrTimeout = errors.New("Connection Timed Out")
+
 // Config documentation
 type Config struct {
 	Addr     *net.UDPAddr
@@ -157,7 +161,7 @@ func (be *BattleEye) Connect() (bool, error) {
 	n, err := be.conn.Read(packet)
 	// check if this is a timeout error.
 	if err, ok := err.(net.Error); ok && err.Timeout() {
-		return false, errors.New("Connection Timed Out")
+		return false, ErrTimeout
 	}
 	if err != nil {
 		return false, err
