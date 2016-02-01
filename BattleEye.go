@@ -60,6 +60,8 @@ type BattleEye struct {
 	responseTimeout      uint32
 	multiResponseTimeout uint32
 	heartbeatTimer       uint32
+	reconnectTimeOut     float64
+	timeofLastPacket     time.Time
 
 	// Sequence byte to determine the packet we are up to in the chain.
 	sequence struct {
@@ -104,12 +106,13 @@ func New(config BeConfig) *BattleEye {
 	}
 
 	return &BattleEye{
-		password:        cfg.Password,
-		addr:            cfg.Addr,
-		connTimeout:     cfg.ConnTimeout,
-		responseTimeout: cfg.ResponseTimeout,
-		heartbeatTimer:  cfg.HeartBeatTimer,
-		writebuffer:     make([]byte, 4096),
+		password:         cfg.Password,
+		addr:             cfg.Addr,
+		connTimeout:      cfg.ConnTimeout,
+		responseTimeout:  cfg.ResponseTimeout,
+		heartbeatTimer:   cfg.HeartBeatTimer,
+		writebuffer:      make([]byte, 4096),
+		reconnectTimeOut: 20,
 	}
 
 }
@@ -179,6 +182,7 @@ func (be *BattleEye) Connect() (bool, error) {
 	// nothing has failed we are good to go :).
 	// Spin up a go routine to read back on a connection
 	be.wg.Add(1)
+	be.timeofLastPacket = time.Now()
 	go be.updateLoop()
 	return true, nil
 }
@@ -191,7 +195,10 @@ func (be *BattleEye) updateLoop() {
 			return
 		}
 		t := time.Now()
-
+		if t.Sub(be.timeofLastPacket).Seconds() > be.reconnectTimeOut {
+			be.timeofLastPacket = t
+			be.Connect()
+		}
 		be.lastCommandPacket.Lock()
 		if t.After(be.lastCommandPacket.Add(time.Second * time.Duration(be.heartbeatTimer))) {
 			be.lastCommandPacket.Unlock()
@@ -219,6 +226,7 @@ func (be *BattleEye) updateLoop() {
 	}
 }
 func (be *BattleEye) processPacket(data []byte) error {
+	be.timeofLastPacket = time.Now()
 	sequence, content, pType, err := verifyPacket(data)
 	if err != nil {
 		// maybe should log this shit somewhere
@@ -257,7 +265,7 @@ func (be *BattleEye) processPacket(data []byte) error {
 	}
 
 	// else for command check if we expect more packets and how many.
-	if pType != packetType.Command {
+	if pType != packetType.Command && pType != 0x00 {
 		return errors.New("Unknown way to respond to packet type: " + string(pType))
 	}
 	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content[1:])
