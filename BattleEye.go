@@ -43,6 +43,7 @@ type BeConfig interface {
 type transmission struct {
 	packet   []byte
 	sequence byte
+	response []byte
 	sent     time.Time
 	w        io.Writer
 }
@@ -365,7 +366,14 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 				if moreToCome {
 					extra = []byte{}
 				}
+
+				//v.response = append(v.response,response...)
+				//v.response = append(v.response,extra...)
+
+				//if !moreToCome {
 				v.w.Write(append(response, extra...))
+				//}
+
 			}
 
 			if !moreToCome {
