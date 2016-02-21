@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"sync"
 	"time"
@@ -14,6 +13,10 @@ import (
 // ErrTimeout is a timeout error and should be seen as
 // failing to establish a connection
 var ErrTimeout = errors.New("Connection Timed Out")
+
+var IoDiscard struct {
+	io.WriteCloser
+}
 
 // Config documentation
 type Config struct {
@@ -45,7 +48,8 @@ type transmission struct {
 	sequence byte
 	response []byte
 	sent     time.Time
-	w        io.Writer
+	counter  int
+	w        io.WriteCloser
 }
 
 //--------------------------------------------------
@@ -63,6 +67,7 @@ type BattleEye struct {
 	heartbeatTimer       uint32
 	reconnectTimeOut     float64
 	timeofLastPacket     time.Time
+	connected            bool
 
 	// Sequence byte to determine the packet we are up to in the chain.
 	sequence struct {
@@ -100,7 +105,7 @@ func New(config BeConfig) *BattleEye {
 		cfg.ConnTimeout = 2
 	}
 	if cfg.ResponseTimeout == 0 {
-		cfg.ResponseTimeout = 1
+		cfg.ResponseTimeout = 2
 	}
 	if cfg.HeartBeatTimer == 0 {
 		cfg.HeartBeatTimer = 5
@@ -113,16 +118,15 @@ func New(config BeConfig) *BattleEye {
 		responseTimeout:  cfg.ResponseTimeout,
 		heartbeatTimer:   cfg.HeartBeatTimer,
 		writebuffer:      make([]byte, 4096),
-		reconnectTimeOut: 20,
+		reconnectTimeOut: 40,
+		wg:               sync.WaitGroup{},
 	}
 
 }
 
-// SendCommand takes a byte array of a command string i.e 'ban xyz' and a io.Writer, it will
-// Make sure the server recieves the command by retrying if needed and write the response to the writer.
-// if no response is recieved then a response has not yet been recieved. a empty write
-func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
+func (be *BattleEye) getSequence() byte {
 	be.sequence.Lock()
+	defer be.sequence.Unlock()
 	sequence := be.sequence.n
 	// increment the sending packet.
 	if be.sequence.n == 255 {
@@ -130,18 +134,39 @@ func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
 	} else {
 		be.sequence.n++
 	}
-	be.sequence.Unlock()
-	packet := buildCommandPacket(command, sequence)
-	be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
-	be.conn.Write(packet)
-	be.packetQueue.Lock()
-	be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: packet, sequence: sequence, sent: time.Now(), w: w})
-	be.packetQueue.Unlock()
-	be.lastCommandPacket.Lock()
-	be.lastCommandPacket.Time = time.Now()
-	be.lastCommandPacket.Unlock()
+	return sequence
+}
 
-	return nil
+// SendCommand takes a byte array of a command string i.e 'ban xyz' and a io.Writer, it will
+// Make sure the server recieves the command by retrying if needed and write the response to the writer.
+// if no response is recieved then a response has not yet been recieved. a empty write
+func (be *BattleEye) SendCommand(command []byte, w io.WriteCloser) error {
+	sequence := be.getSequence()
+	packet := buildCommandPacket(command, sequence)
+	fmt.Println("Sending packet Seq:", sequence, "command:", string(command))
+	return be.sendPacket(packet, w, 0)
+}
+
+func (be *BattleEye) sendPacket(packet []byte, w io.WriteCloser, counter int) error {
+	sequence, err := getSequenceFromPacket(packet)
+
+	if err != nil {
+
+		return err
+	}
+	if be.connected {
+		fmt.Println("Packet:", packet, "Sequence:", sequence, "err:", err)
+		be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
+		_, err = be.conn.Write(packet)
+		be.packetQueue.Lock()
+		be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: packet, sequence: sequence, sent: time.Now(), w: w, counter: counter})
+		be.packetQueue.Unlock()
+		be.lastCommandPacket.Lock()
+		be.lastCommandPacket.Time = time.Now()
+		be.lastCommandPacket.Unlock()
+	}
+
+	return err
 }
 
 // Connect attempts to establish a connection with the BattlEye Rcon server and if it works it then sets up a loop in a goroutine
@@ -150,28 +175,35 @@ func (be *BattleEye) Connect() (bool, error) {
 	be.wg = sync.WaitGroup{}
 	var err error
 	// dial the Address
+
 	be.conn, err = net.DialUDP("udp", nil, be.addr)
 	if err != nil {
+		fmt.Println("Fail dial")
 		return false, err
 	}
 	// make a buffer to read the packet packed with extra space
-	packet := make([]byte, 9)
-
+	buf := make([]byte, 20)
 	// set timeout deadline so we dont block forever
 	be.conn.SetReadDeadline(time.Now().Add(time.Second * 2))
 	// Send a Connection Packet
-	be.conn.Write(buildConnectionPacket(be.password))
+	be.conn.SetWriteDeadline(time.Now().Add(time.Second * 2))
+	_, err = be.conn.Write(buildConnectionPacket(be.password))
+	if err != nil {
+		return false, err
+	}
 	// Read connection and hope it doesn't time out and the server responds
-	n, err := be.conn.Read(packet)
+	n, err := be.conn.Read(buf)
+
 	// check if this is a timeout error.
 	if err, ok := err.(net.Error); ok && err.Timeout() {
+		//fmt.Println("error", err)
 		return false, ErrTimeout
 	}
 	if err != nil {
 		return false, err
 	}
-
-	result, err := checkLogin(packet[:n])
+	fmt.Println(buf[:n])
+	result, err := checkLogin(buf[:n])
 	if err != nil {
 		return false, err
 	}
@@ -182,9 +214,15 @@ func (be *BattleEye) Connect() (bool, error) {
 
 	// nothing has failed we are good to go :).
 	// Spin up a go routine to read back on a connection
+
 	be.wg.Add(1)
 	be.timeofLastPacket = time.Now()
+	be.lastCommandPacket.Lock()
+	be.lastCommandPacket.Time = time.Now()
+	be.lastCommandPacket.Unlock()
 	go be.updateLoop()
+	fmt.Println("Succesfully Logged into Rcon")
+	be.connected = true
 	return true, nil
 }
 
@@ -197,60 +235,60 @@ func (be *BattleEye) updateLoop() {
 		}
 		t := time.Now()
 		if t.Sub(be.timeofLastPacket).Seconds() > be.reconnectTimeOut {
-			be.timeofLastPacket = t
-			be.Connect()
-		}
-		be.lastCommandPacket.Lock()
-		if t.After(be.lastCommandPacket.Add(time.Second * time.Duration(be.heartbeatTimer))) {
-			be.lastCommandPacket.Unlock()
-			err := be.SendCommand([]byte{}, ioutil.Discard)
-			if err != nil {
-				fmt.Println("Failed to send update Packet", err)
-				return
+			fmt.Println("Reconnecting")
+			be.connected = false
+			b, err := be.Reconnect()
+			if b {
+				be.timeofLastPacket = time.Now()
+				be.connected = true
+				fmt.Println("Reconnected")
+			} else {
+				fmt.Println("Failed to reconnect reason:", err)
+				<-time.After(time.Second * 15)
 			}
-			be.lastCommandPacket.Time = t
-		} else {
-			be.lastCommandPacket.Unlock()
 		}
 
+		be.lastCommandPacket.Lock()
+		if t.After(be.lastCommandPacket.Add(time.Second * time.Duration(be.heartbeatTimer))) {
+			go be.SendCommand([]byte{}, IoDiscard)
+			be.lastCommandPacket.Time = t
+		}
+		be.lastCommandPacket.Unlock()
+
+		go be.checkOldPackets()
 		// do check for new incoming data
-		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond))
+		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 20))
 		n, err := be.conn.Read(be.writebuffer)
 		if err != nil {
 			continue
 		}
-		data := be.writebuffer[:n]
-		if err := be.processPacket(data); err != nil {
-			fmt.Println(err)
-		}
+		go be.processPacket(be.writebuffer[:n])
 
 	}
 }
-func (be *BattleEye) processPacket(data []byte) error {
+func (be *BattleEye) processPacket(data []byte) {
 	be.timeofLastPacket = time.Now()
 	sequence, content, pType, err := verifyPacket(data)
 	if err != nil {
-		// maybe should log this shit somewhere
-		//fmt.Println("")
-		//fmt.Errorf(format, ...)
-		return err
+		fmt.Println("Read Packet Error:", err)
+		return
 	}
+	fmt.Println("Recieved packet with Seq", int(sequence), "Content:", string(content))
 	// if say command write acknoledge and leave
 	if pType == packetType.ServerMessage {
 		be.sequence.Lock()
-		if sequence >= be.sequence.n {
-			// not sure how byte overflow is handled in golang... not sure if it would roll over to 0 or throw and error.
-			if sequence == 255 {
-				be.sequence.n = 0x00
-			} else {
-				be.sequence.n = sequence + 1
-			}
+		if sequence == 255 {
+			be.sequence.n = 0x00
+		} else {
+			be.sequence.n = sequence + 0x01
 		}
+		//fmt.Println("incremented Seq to ", be.sequence.n)
 		be.sequence.Unlock()
+
 		be.checkSequenceClash(sequence)
 		be.chatWriter.Lock()
 		if be.chatWriter.Writer != nil {
-			be.chatWriter.Write(append(content[3:], []byte("\n")...))
+			be.chatWriter.Write(append(content[3:], []byte{'\n'}...))
 		}
 		be.chatWriter.Unlock()
 		// we must acknoledge we recieved this first
@@ -262,12 +300,13 @@ func (be *BattleEye) processPacket(data []byte) error {
 			}
 		}
 
-		return nil
+		return
 	}
 
 	// else for command check if we expect more packets and how many.
 	if pType != packetType.Command && pType != 0x00 {
-		return errors.New("Unknown way to respond to packet type: " + string(pType))
+		fmt.Println("Unknown way to respond to packet type: " + string(pType))
+		return
 	}
 	packetCount, currentPacket, isMultiPacket := checkMultiPacketResponse(content[1:])
 	//fmt.Println("sequence", sequence)
@@ -275,7 +314,7 @@ func (be *BattleEye) processPacket(data []byte) error {
 	if !isMultiPacket {
 		//fmt.Println("returning", sequence)
 		be.handleResponseToQueue(sequence, content[3:], false)
-		return nil
+		return
 	}
 
 	if currentPacket+1 < packetCount {
@@ -285,7 +324,7 @@ func (be *BattleEye) processPacket(data []byte) error {
 		//fmt.Println("finish")
 		be.handleResponseToQueue(sequence, content[6:], false)
 	}
-	return nil
+	return
 	// loop till we have all the messages and i guess send confirms back.
 	/*for ; currentPacket >= packetCount; currentPacket++ {
 		//fmt.Println("Is Multi Packet. Expecting", packetCount, "Current Packet", currentPacket)
@@ -326,6 +365,35 @@ func (be *BattleEye) Disconnect() error {
 	return nil
 }
 
+func (be *BattleEye) Reconnect() (bool, error) {
+	packet := make([]byte, 9)
+	be.conn.SetReadDeadline(time.Now().Add(time.Second * 2))
+	// Send a Connection Packet
+	be.conn.SetWriteDeadline(time.Now().Add(time.Second * 2))
+	be.conn.Write(buildConnectionPacket(be.password))
+	// Read connection and hope it doesn't time out and the server responds
+	n, err := be.conn.Read(packet)
+	// check if this is a timeout error.
+	if err, ok := err.(net.Error); ok && err.Timeout() {
+		return false, ErrTimeout
+	}
+	if err != nil {
+		return false, err
+	}
+
+	result, err := checkLogin(packet[:n])
+	if err != nil {
+		return false, err
+	}
+
+	if result == packetResponse.LoginFail {
+		return false, nil
+	}
+	be.timeofLastPacket = time.Now()
+	be.connected = true
+	return true, nil
+}
+
 //SetChatWriter Sets a writer to write all chat messages too as they come in
 func (be *BattleEye) SetChatWriter(w io.Writer) {
 	be.chatWriter.Lock()
@@ -334,14 +402,19 @@ func (be *BattleEye) SetChatWriter(w io.Writer) {
 }
 func (be *BattleEye) checkSequenceClash(sequence byte) {
 	be.packetQueue.Lock()
-	for k, v := range be.packetQueue.queue {
+	defer be.packetQueue.Unlock()
+	//fmt.Println("Packet Queue Size", len(be.packetQueue.queue))
+	for i := 0; i < len(be.packetQueue.queue); i++ {
+		v := be.packetQueue.queue[i]
 		if v.sequence == sequence {
-			go be.SendCommand(v.packet, v.w)
-			be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
+			be.packetQueue.queue = append(be.packetQueue.queue[:i], be.packetQueue.queue[i+1:]...)
+			i--
+			//packet, _ := replaceSequence(v.packet, be.getSequence())
+			//fmt.Println("Packet Clash Resending:", v.packet)
+			//go be.sendPacket(packet, v.w, v.counter)
 		}
 
 	}
-	be.packetQueue.Unlock()
 }
 func checkLogin(packet []byte) (byte, error) {
 	var err error
@@ -377,8 +450,12 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 			}
 
 			if !moreToCome {
-				//v.w.Close()
+				if v.w != nil {
+					v.w.Close()
+				}
+
 				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
+
 			}
 			break
 		}
@@ -412,4 +489,25 @@ func verifyPacket(data []byte) (sequence byte, content []byte, pType byte, err e
 	pType, err = responseType(data)
 
 	return
+}
+
+func (be *BattleEye) checkOldPackets() {
+	be.packetQueue.Lock()
+	defer be.packetQueue.Unlock()
+	t := time.Now()
+	for i := 0; i < len(be.packetQueue.queue); i++ {
+		v := be.packetQueue.queue[i]
+		if t.After(v.sent.Add(time.Second * 2)) {
+			//fmt.Println(string(v.packet), "Count:", v.counter)
+			v.counter++
+			be.packetQueue.queue = append(be.packetQueue.queue[:i], be.packetQueue.queue[i+1:]...)
+			if v.counter < 4 && t.After(v.sent.Add(time.Second*2)) {
+				//seq := be.getSequence()
+				//packet, _ := replaceSequence(v.packet, seq)
+				//fmt.Println("Sending new packet seq:", int(seq), "packet:", packet)
+				//go be.sendPacket(packet, v.w, v.counter)
+			}
+			i--
+		}
+	}
 }

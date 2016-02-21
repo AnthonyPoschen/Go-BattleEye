@@ -3,6 +3,7 @@ package BattleEye
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 func buildHeader(Checksum uint32) []byte {
@@ -78,4 +79,16 @@ func checkMultiPacketResponse(data []byte) (byte, byte, bool) {
 		return 0, 0, false
 	}
 	return data[3], data[4], true
+}
+
+func replaceSequence(packet []byte, sequence byte) ([]byte, error) {
+	if len(packet) < 10 {
+		return []byte{}, errors.New("Packet to small")
+	}
+	packet[8] = sequence
+	data, _ := stripHeader(packet)
+	fmt.Println(data)
+	checksum := makeChecksum(data)
+	header := buildHeader(checksum)
+	return append(header, data...), nil
 }

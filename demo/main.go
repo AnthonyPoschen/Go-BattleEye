@@ -1,7 +1,8 @@
 package main
 
-//import "../battleeye"
+//import ".././battleeye"
 
 func main() {
 	//cf := battleeye.Config{}
+
 }
