@@ -142,6 +142,7 @@ func (be *BattleEye) SendCommand(command []byte, w io.WriteCloser) error {
 }
 
 func (be *BattleEye) sendPacket(packet []byte, w io.WriteCloser, counter int) error {
+	sequence, _ := getSequenceFromPacket(packet)
 	be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
 	be.conn.Write(packet)
 	be.packetQueue.Lock()
@@ -150,6 +151,7 @@ func (be *BattleEye) sendPacket(packet []byte, w io.WriteCloser, counter int) er
 	be.lastCommandPacket.Lock()
 	be.lastCommandPacket.Time = time.Now()
 	be.lastCommandPacket.Unlock()
+	return nil
 }
 
 // Connect attempts to establish a connection with the BattlEye Rcon server and if it works it then sets up a loop in a goroutine
@@ -401,7 +403,7 @@ func (be *BattleEye) checkOldPackets() {
 	be.packetQueue.Lock()
 	defer be.packetQueue.Unlock()
 	t := time.Now()
-	for i = 0; i < len(be.packetQueue.queue); i++ {
+	for i := 0; i < len(be.packetQueue.queue); i++ {
 		packet := be.packetQueue.queue[i]
 		if t.After(packet.sent.Add(time.Second * time.Duration(be.responseTimeout))) {
 			if packet.counter > 3 {
