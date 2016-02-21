@@ -79,3 +79,31 @@ func checkMultiPacketResponse(data []byte) (byte, byte, bool) {
 	}
 	return data[3], data[4], true
 }
+
+func verifyPacket(data []byte) (sequence byte, content []byte, pType byte, err error) {
+	checksum, err := getCheckSumFromBEPacket(data)
+	if err != nil {
+		return
+	}
+	if len(data) < 6 {
+		err = errors.New("Packet size too small to have data")
+		return
+	}
+	match := dataMatchesCheckSum(data[6:], checksum)
+	if !match {
+		err = errors.New("Checksum does not match data")
+		return
+	}
+	sequence, err = getSequenceFromPacket(data)
+	if err != nil {
+		return
+	}
+
+	content, err = stripHeader(data)
+	if err != nil {
+		return
+	}
+	pType, err = responseType(data)
+
+	return
+}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"sync"
 	"time"
@@ -45,7 +44,8 @@ type transmission struct {
 	sequence byte
 	response []byte
 	sent     time.Time
-	w        io.Writer
+	w        io.WriteCloser
+	counter  int
 }
 
 //--------------------------------------------------
@@ -118,10 +118,7 @@ func New(config BeConfig) *BattleEye {
 
 }
 
-// SendCommand takes a byte array of a command string i.e 'ban xyz' and a io.Writer, it will
-// Make sure the server recieves the command by retrying if needed and write the response to the writer.
-// if no response is recieved then a response has not yet been recieved. a empty write
-func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
+func (be *BattleEye) getSequence() byte {
 	be.sequence.Lock()
 	sequence := be.sequence.n
 	// increment the sending packet.
@@ -131,17 +128,28 @@ func (be *BattleEye) SendCommand(command []byte, w io.Writer) error {
 		be.sequence.n++
 	}
 	be.sequence.Unlock()
+	return sequence
+}
+
+// SendCommand takes a byte array of a command string i.e 'ban xyz' and a io.Writer, it will
+// Make sure the server recieves the command by retrying if needed and write the response to the writer.
+// if no response is recieved then a response has not yet been recieved. a empty write
+func (be *BattleEye) SendCommand(command []byte, w io.WriteCloser) error {
+	sequence := be.getSequence()
 	packet := buildCommandPacket(command, sequence)
+
+	return be.sendPacket(packet, w, 0)
+}
+
+func (be *BattleEye) sendPacket(packet []byte, w io.WriteCloser, counter int) error {
 	be.conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(be.responseTimeout)))
 	be.conn.Write(packet)
 	be.packetQueue.Lock()
-	be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: packet, sequence: sequence, sent: time.Now(), w: w})
+	be.packetQueue.queue = append(be.packetQueue.queue, transmission{packet: packet, sequence: sequence, sent: time.Now(), w: w, counter: counter})
 	be.packetQueue.Unlock()
 	be.lastCommandPacket.Lock()
 	be.lastCommandPacket.Time = time.Now()
 	be.lastCommandPacket.Unlock()
-
-	return nil
 }
 
 // Connect attempts to establish a connection with the BattlEye Rcon server and if it works it then sets up a loop in a goroutine
@@ -203,7 +211,7 @@ func (be *BattleEye) updateLoop() {
 		be.lastCommandPacket.Lock()
 		if t.After(be.lastCommandPacket.Add(time.Second * time.Duration(be.heartbeatTimer))) {
 			be.lastCommandPacket.Unlock()
-			err := be.SendCommand([]byte{}, ioutil.Discard)
+			err := be.SendCommand([]byte{}, nil)
 			if err != nil {
 				fmt.Println("Failed to send update Packet", err)
 				return
@@ -377,7 +385,10 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 			}
 
 			if !moreToCome {
-				//v.w.Close()
+				if v.w != nil {
+					v.w.Close()
+				}
+
 				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
 			}
 			break
@@ -386,30 +397,22 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 	be.packetQueue.Unlock()
 }
 
-func verifyPacket(data []byte) (sequence byte, content []byte, pType byte, err error) {
-	checksum, err := getCheckSumFromBEPacket(data)
-	if err != nil {
-		return
-	}
-	if len(data) < 6 {
-		err = errors.New("Packet size too small to have data")
-		return
-	}
-	match := dataMatchesCheckSum(data[6:], checksum)
-	if !match {
-		err = errors.New("Checksum does not match data")
-		return
-	}
-	sequence, err = getSequenceFromPacket(data)
-	if err != nil {
-		return
-	}
+func (be *BattleEye) checkOldPackets() {
+	be.packetQueue.Lock()
+	defer be.packetQueue.Unlock()
+	t := time.Now()
+	for i = 0; i < len(be.packetQueue.queue); i++ {
+		packet := be.packetQueue.queue[i]
+		if t.After(packet.sent.Add(time.Second * time.Duration(be.responseTimeout))) {
+			if packet.counter > 3 {
+				if packet.w != nil {
+					packet.w.Close()
+				}
+				be.packetQueue.queue = append(be.packetQueue.queue[:i], be.packetQueue.queue[i+1:]...)
+				continue
+			}
 
-	content, err = stripHeader(data)
-	if err != nil {
-		return
+			//go be.sendPacket(packet, w, counter)
+		}
 	}
-	pType, err = responseType(data)
-
-	return
 }
