@@ -100,7 +100,7 @@ func New(config BeConfig) *BattleEye {
 		cfg.ConnTimeout = 2
 	}
 	if cfg.ResponseTimeout == 0 {
-		cfg.ResponseTimeout = 1
+		cfg.ResponseTimeout = 2
 	}
 	if cfg.HeartBeatTimer == 0 {
 		cfg.HeartBeatTimer = 5
@@ -222,7 +222,7 @@ func (be *BattleEye) updateLoop() {
 		} else {
 			be.lastCommandPacket.Unlock()
 		}
-
+		go be.checkOldPackets()
 		// do check for new incoming data
 		be.conn.SetReadDeadline(time.Now().Add(time.Millisecond))
 		n, err := be.conn.Read(be.writebuffer)
@@ -245,17 +245,19 @@ func (be *BattleEye) processPacket(data []byte) error {
 		//fmt.Errorf(format, ...)
 		return err
 	}
+	fmt.Println("Recieved Packet With Seq:", sequence)
 	// if say command write acknoledge and leave
 	if pType == packetType.ServerMessage {
 		be.sequence.Lock()
-		if sequence >= be.sequence.n {
-			// not sure how byte overflow is handled in golang... not sure if it would roll over to 0 or throw and error.
-			if sequence == 255 {
-				be.sequence.n = 0x00
-			} else {
-				be.sequence.n = sequence + 1
-			}
-		}
+		fmt.Println("Changing Sequence from,", be.sequence.n, "To", sequence+1)
+		//if sequence >= be.sequence.n {
+		// not sure how byte overflow is handled in golang... not sure if it would roll over to 0 or throw and error.
+		//if sequence == 255 {
+		//	be.sequence.n = 0x00
+		//} else {
+		//	be.sequence.n = sequence + 1
+		//}
+		//}
 		be.sequence.Unlock()
 		be.checkSequenceClash(sequence)
 		be.chatWriter.Lock()
@@ -346,7 +348,8 @@ func (be *BattleEye) checkSequenceClash(sequence byte) {
 	be.packetQueue.Lock()
 	for k, v := range be.packetQueue.queue {
 		if v.sequence == sequence {
-			go be.SendCommand(v.packet, v.w)
+			data, _ := replaceSequence(v.packet, be.getSequence())
+			go be.sendPacket(data, v.w, v.counter)
 			be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
 		}
 
@@ -369,7 +372,8 @@ func checkLogin(packet []byte) (byte, error) {
 
 func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreToCome bool) {
 	be.packetQueue.Lock()
-	for k, v := range be.packetQueue.queue {
+	for i := 0; i < len(be.packetQueue.queue); i++ {
+		v := be.packetQueue.queue[i]
 		if v.sequence == sequence {
 			if v.w != nil {
 				extra := []byte("\n")
@@ -377,21 +381,22 @@ func (be *BattleEye) handleResponseToQueue(sequence byte, response []byte, moreT
 					extra = []byte{}
 				}
 
-				//v.response = append(v.response,response...)
-				//v.response = append(v.response,extra...)
-
+				v.response = append(v.response, response...)
+				v.response = append(v.response, extra...)
+				be.packetQueue.queue[i] = v
 				//if !moreToCome {
-				v.w.Write(append(response, extra...))
+				//v.w.Write(append(response, extra...))
 				//}
 
 			}
 
 			if !moreToCome {
 				if v.w != nil {
+					v.w.Write(v.response)
 					v.w.Close()
 				}
 
-				be.packetQueue.queue = append(be.packetQueue.queue[:k], be.packetQueue.queue[k+1:]...)
+				be.packetQueue.queue = append(be.packetQueue.queue[:i], be.packetQueue.queue[i+1:]...)
 			}
 			break
 		}
@@ -406,15 +411,19 @@ func (be *BattleEye) checkOldPackets() {
 	for i := 0; i < len(be.packetQueue.queue); i++ {
 		packet := be.packetQueue.queue[i]
 		if t.After(packet.sent.Add(time.Second * time.Duration(be.responseTimeout))) {
-			if packet.counter > 3 {
+			if packet.counter < 4 {
 				if packet.w != nil {
 					packet.w.Close()
 				}
-				be.packetQueue.queue = append(be.packetQueue.queue[:i], be.packetQueue.queue[i+1:]...)
-				continue
+				seq := be.getSequence()
+				data, _ := replaceSequence(packet.packet, seq)
+				packet.counter++
+				fmt.Println("resending packet", data, "Counter", packet.counter, "Sequence:", seq)
+				go be.sendPacket(data, packet.w, packet.counter)
 			}
+			be.packetQueue.queue = append(be.packetQueue.queue[:i], be.packetQueue.queue[i+1:]...)
+			i--
 
-			//go be.sendPacket(packet, w, counter)
 		}
 	}
 }

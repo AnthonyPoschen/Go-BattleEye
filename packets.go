@@ -107,3 +107,14 @@ func verifyPacket(data []byte) (sequence byte, content []byte, pType byte, err e
 
 	return
 }
+
+func replaceSequence(packet []byte, sequence byte) ([]byte, error) {
+	if len(packet) < 10 {
+		return []byte{}, errors.New("Packet to small")
+	}
+	packet[8] = sequence
+	data, _ := stripHeader(packet)
+	checksum := makeChecksum(data)
+	header := buildHeader(checksum)
+	return append(header, data...), nil
+}
