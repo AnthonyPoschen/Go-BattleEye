@@ -504,6 +504,7 @@ func (be *BattleEye) handleServerMessage(content []byte) {
 		if strings.HasPrefix(string(content), v) {
 			if v == "RCon admin" {
 				if strings.HasSuffix(string(content), "logged in\n") {
+					// register this as an event. rather then an admin message.
 					break
 				}
 			}
