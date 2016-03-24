@@ -205,6 +205,7 @@ func (be *BattleEye) Connect() (bool, error) {
 
 	// nothing has failed we are good to go :).
 	// Spin up a go routine to read back on a connection
+	be.wg = sync.WaitGroup{}
 	be.wg.Add(1)
 	be.timeofLastPacket = time.Now()
 	be.clearforSend = true
@@ -510,7 +511,7 @@ func (be *BattleEye) handleServerMessage(content []byte) {
 			}
 			be.chatWriter.Lock()
 			if be.chatWriter.Writer != nil {
-				be.chatWriter.Write(append([]byte("Chat: "), content...))
+				be.chatWriter.Write(content)
 			}
 			be.chatWriter.Unlock()
 			return
@@ -518,7 +519,7 @@ func (be *BattleEye) handleServerMessage(content []byte) {
 	}
 	be.eventWriter.Lock()
 	if be.eventWriter.Writer != nil {
-		be.eventWriter.Write(append([]byte("Event: "), content...))
+		be.eventWriter.Write(content)
 	}
 	be.eventWriter.Unlock()
 }
