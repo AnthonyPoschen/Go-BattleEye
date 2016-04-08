@@ -170,7 +170,6 @@ func (be *BattleEye) QueueCommand(command []byte, w io.WriteCloser) {
 // Connect attempts to establish a connection with the BattlEye Rcon server and if it works it then sets up a loop in a goroutine
 // to recieve all callbacks.
 func (be *BattleEye) Connect() (bool, error) {
-	be.wg = sync.WaitGroup{}
 	var err error
 	// dial the Address
 	be.conn, err = net.DialUDP("udp", nil, be.addr)
@@ -188,18 +187,22 @@ func (be *BattleEye) Connect() (bool, error) {
 	n, err := be.conn.Read(packet)
 	// check if this is a timeout error.
 	if err, ok := err.(net.Error); ok && err.Timeout() {
+		be.conn.Close()
 		return false, ErrTimeout
 	}
 	if err != nil {
+		be.conn.Close()
 		return false, err
 	}
 
 	result, err := checkLogin(packet[:n])
 	if err != nil {
+		be.conn.Close()
 		return false, err
 	}
 
 	if result == packetResponse.LoginFail {
+		be.conn.Close()
 		return false, nil
 	}
 
