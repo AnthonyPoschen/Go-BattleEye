@@ -80,6 +80,12 @@ type BattleEye struct {
 		sync.Mutex
 		io.Writer
 	}
+
+	connStatus struct {
+		sync.Mutex
+		bool
+	}
+
 	writebuffer []byte
 
 	conn              *net.UDPConn
@@ -175,6 +181,7 @@ func (be *BattleEye) Connect() (bool, error) {
 	// dial the Address
 	be.conn, err = net.DialUDP("udp", nil, be.addr)
 	if err != nil {
+		be.setConnStatus(false)
 		return false, err
 	}
 	// make a buffer to read the packet packed with extra space
@@ -188,18 +195,22 @@ func (be *BattleEye) Connect() (bool, error) {
 	n, err := be.conn.Read(packet)
 	// check if this is a timeout error.
 	if err, ok := err.(net.Error); ok && err.Timeout() {
+		be.setConnStatus(false)
 		return false, ErrTimeout
 	}
 	if err != nil {
+		be.setConnStatus(false)
 		return false, err
 	}
 
 	result, err := checkLogin(packet[:n])
 	if err != nil {
+		be.setConnStatus(false)
 		return false, err
 	}
 
 	if result == packetResponse.LoginFail {
+		be.setConnStatus(false)
 		return false, nil
 	}
 
@@ -210,6 +221,7 @@ func (be *BattleEye) Connect() (bool, error) {
 	be.clearforSend = true
 	be.currentSequence = 0
 	go be.updateLoop()
+	be.setConnStatus(true)
 	return true, nil
 }
 
@@ -363,6 +375,7 @@ func (be *BattleEye) processPacket(data []byte) error {
 // Disconnect shuts down the infinite loop to recieve packets and closes the connection
 func (be *BattleEye) Disconnect() error {
 	// maybe also close the main loop and wait for that?
+	be.setConnStatus(false)
 	be.conn.Close()
 	be.wg.Wait()
 	return nil
@@ -521,4 +534,18 @@ func (be *BattleEye) handleServerMessage(content []byte) {
 		be.eventWriter.Write(append([]byte("Event: "), content...))
 	}
 	be.eventWriter.Unlock()
+}
+
+func (be *BattleEye) setConnStatus(status bool) {
+	be.connStatus.Lock()
+	be.connStatus.bool = status
+	be.connStatus.Unlock()
+}
+
+// GetConnectionStatus returns the state of the rcon connection currently.
+func (be *BattleEye) GetConnectionStatus() (status bool) {
+	be.connStatus.Lock()
+	status = be.connStatus.bool
+	be.connStatus.Unlock()
+	return
 }
